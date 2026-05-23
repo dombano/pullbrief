@@ -1,41 +1,46 @@
-import OpenAI from "openai";
+import OpenAI from 'openai';
+import * as core from '@actions/core';
+import { withRetry } from './retry';
 
-export interface SummaryResult {
-  summary: string;
-  tokensUsed: number;
+export interface OpenAIOptions {
+  apiKey: string;
+  model: string;
+  maxTokens: number;
 }
 
 export async function generateSummary(
   prompt: string,
-  apiKey: string,
-  model: string = "gpt-4o-mini"
-): Promise<SummaryResult> {
-  const client = new OpenAI({ apiKey });
+  options: OpenAIOptions
+): Promise<string> {
+  const client = new OpenAI({ apiKey: options.apiKey });
 
-  const response = await client.chat.completions.create({
-    model,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are a helpful assistant that generates concise, clear pull request summaries for software engineers.",
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-    temperature: 0.3,
-    max_tokens: 512,
-  });
+  core.debug(`Calling OpenAI model: ${options.model}`);
 
-  const message = response.choices[0]?.message?.content;
-  if (!message) {
-    throw new Error("OpenAI returned an empty response");
+  const response = await withRetry(
+    () =>
+      client.chat.completions.create({
+        model: options.model,
+        max_tokens: options.maxTokens,
+        messages: [
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+      }),
+    {
+      maxAttempts: 3,
+      initialDelayMs: 1000,
+      backoffFactor: 2,
+    }
+  );
+
+  const content = response.choices[0]?.message?.content;
+
+  if (!content) {
+    throw new Error('OpenAI returned an empty response');
   }
 
-  return {
-    summary: message.trim(),
-    tokensUsed: response.usage?.total_tokens ?? 0,
-  };
+  core.debug(`Received summary (${content.length} chars)`);
+  return content.trim();
 }
